@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>connectfour</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background: #fff;
+    color: #000;
+    transition: background 0.3s, color 0.3s;
+  }
+  body.dark {
+    background: #121830;
+    color: #ddd;
+  }
+  #container {
+    max-width: 500px;
+    margin: auto;
+    text-align: center;
+  }
+  canvas {
+    border: 2px solid #000;
+    background: #1c75ff;
+    cursor: pointer;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  body.dark canvas {
+    background: #0a1430;
+    border-color: #4466aa;
+  }
+  button, select {
+    margin: 5px 3px;
+    padding: 8px 12px;
+    font-size: 16px;
+    border-radius: 5px;
+    border: 1px solid #999;
+    cursor: pointer;
+    user-select: none;
+  }
+  button:hover, select:hover {
+    background-color: #eee;
+  }
+  body.dark button:hover, body.dark select:hover {
+    background-color: #334466;
+    color: #eee;
+  }
+  button:disabled, select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  #status {
+    margin-top: 10px;
+    font-size: 18px;
+    font-weight: bold;
+  }
+  #savedList {
+    list-style: none;
+    padding: 0;
+    max-height: 120px;
+    overflow-y: auto;
+    border: 1px solid #999;
+    border-radius: 5px;
+    background: #f9f9f9;
+    margin-bottom: 10px;
+  }
+  body.dark #savedList {
+    background: #223355;
+    border-color: #4466aa;
+  }
+  #savedList li {
+    padding: 5px 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #ccc;
+  }
+  #savedList li:last-child {
+    border-bottom: none;
+  }
+  #savedList li button {
+    padding: 3px 8px;
+    font-size: 14px;
+  }
+  #replayControls button {
+    margin: 5px 8px;
+    padding: 6px 12px;
+    font-size: 18px;
+    border-radius: 6px;
+  }
+</style>
+</head>
+<body>
+<div id="container">
+  <h1>!🔴四連棋🟡!</h1>
+  <canvas id="board" width="455" height="390"></canvas>
+  <div>
+    <button id="resetBtn">🔁 重置遊戲</button>
+    <button id="toggleDarkBtn">🌙 夜間模式</button>
+    <button id="replayBtn">🎬 重播棋局</button>
+    <button id="saveBtn">💾 儲存棋譜</button>
+  </div>
+  <div style="margin-top:8px;">
+    模式：
+    <select id="modeSelect">
+      <option value="pvp">玩家 vs 玩家</option>
+      <option value="ai" selected>玩家 vs 電腦</option>
+      <option value="aivsai">電腦 vs 電腦</option>
+    </select>
+    難度：
+    <select id="difficultySelect">
+      <option value="2">🔵簡單</option>
+      <option value="4" selected>🟢普通</option>
+      <option value="6">🔴困難</option>
+    </select>
+  </div>
+  <div id="status">請玩家先手 (🔴)</div>
+
+  <h3>📁 已儲存棋譜</h3>
+  <ul id="savedList"></ul>
+  <div id="replayControls" style="display:none;">
+    <button id="backBtn">⬅️ 上一步</button>
+    <button id="playPauseBtn">▶️ 播放</button>
+    <button id="nextBtn">➡️ 下一步</button>
+    <button id="restartBtn">🔄 重播</button>
+  </div>
+</div>
+
+<script>
+  const ROWS = 6, COLS = 7, CELL = 65, R = 28;
+  const EMPTY = 0, P1 = 1, P2 = 2;
+
+  let board, currentPlayer, gameOver, animating, animDisc, moveHistory;
+  let mode, difficulty;
+  let lastWinner = '';
+  let historyToReplay = null, replayIndex = 0, replayTimer = null;
+  let isPlayingReplay = false;
+
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+  const resetBtn = document.getElementById('resetBtn');
+  const toggleDarkBtn = document.getElementById('toggleDarkBtn');
+  const replayBtn = document.getElementById('replayBtn');
+  const saveBtn = document.getElementById('saveBtn');
+  const modeSelect = document.getElementById('modeSelect');
+  const difficultySelect = document.getElementById('difficultySelect');
+  const savedList = document.getElementById('savedList');
+  const replayControls = document.getElementById('replayControls');
+  const backBtn = document.getElementById('backBtn');
+  const playPauseBtn = document.getElementById('playPauseBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const restartBtn = document.getElementById('restartBtn');
+
+  const dropSound = new Audio('https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg');
+  dropSound.volume = 0.4;
+
+  function init() {
+    board = Array.from({ length: ROWS }, () => Array(COLS).fill(EMPTY));
+    currentPlayer = P1;
+    gameOver = false;
+    animating = false;
+    animDisc = null;
+    moveHistory = [];
+    lastWinner = '';
+    historyToReplay = null;
+    replayIndex = 0;
+    clearInterval(replayTimer);
+    replayTimer = null;
+    isPlayingReplay = false;
+    replayControls.style.display = 'none';
+
+    mode = modeSelect.value;
+    difficulty = parseInt(difficultySelect.value);
+
+    difficultySelect.disabled = (mode === 'pvp');
+
+    updateStatus();
+    draw();
+
+    if (mode === 'aivsai') {
+      setTimeout(aiVsAiLoop, 400);
+    }
+  }
+
+  function styleBoard() {
+    ctx.save();
+    ctx.fillStyle = document.body.classList.contains('dark') ? '#0a1430' : '#1c75ff';
+    ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+    ctx.strokeStyle = document.body.classList.contains('dark') ? '#4466aa' : '#000';
+    ctx.lineWidth = 1;
+    for (let r = 0; r <= ROWS; r++) {
+      ctx.beginPath();
+      ctx.moveTo(0, r * CELL);
+      ctx.lineTo(COLS * CELL, r * CELL);
+      ctx.stroke();
+    }
+    for (let c = 0; c <= COLS; c++) {
+      ctx.beginPath();
+      ctx.moveTo(c * CELL, 0);
+      ctx.lineTo(c * CELL, ROWS * CELL);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawPieces() {
+    styleBoard();
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (board[r][c] !== EMPTY) {
+          ctx.beginPath();
+          const x = c * CELL + CELL / 2;
+          const y = r * CELL + CELL / 2;
+          ctx.arc(x, y, R, 0, 2 * Math.PI);
+          ctx.fillStyle = board[r][c] === P1 ? '#e33e3e' : '#f5d742';
+          ctx.fill();
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  function draw() {
+    drawPieces();
+  }
+
+  canvas.addEventListener('click', e => {
+    if (gameOver || animating || isAIturn() || isPlayingReplay) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const col = Math.floor((e.clientX - rect.left) / CELL);
+    const row = getOpenRow(col);
+    if (row === null) return;
+
+    makeMove(col, row, currentPlayer);
+  });
+
+  function getOpenRow(col) {
+    for (let r = ROWS - 1; r >= 0; r--) {
+      if (board[r][col] === EMPTY) return r;
+    }
+    return null;
+  }
+
+  function isValidMove(col, row) {
+    return board[row][col] === EMPTY;
+  }
+
+  function makeMove(col, row, player) {
+    if (!isValidMove(col, row)) return;
+    animating = true;
+    animDisc = { col, row, p: player, y: -R * 2, targetY: row * CELL + CELL / 2 };
+    dropSound.currentTime = 0;
+    dropSound.play();
+    moveHistory.push({ col, row, player });
+    animateDrop();
+  }
+
+  function animateDrop() {
+    ctx.clearRect(0, 0, COLS * CELL, ROWS * CELL);
+    styleBoard();
+    drawPieces();
+
+    ctx.beginPath();
+    const x = animDisc.col * CELL + CELL / 2;
+    animDisc.y += 20;
+    if (animDisc.y >= animDisc.targetY) animDisc.y = animDisc.targetY;
+    ctx.arc(x, animDisc.y, R, 0, 2 * Math.PI);
+    ctx.fillStyle = animDisc.p === P1 ? '#e33e3e' : '#f5d742';
+    ctx.fill();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    if (animDisc.y < animDisc.targetY) {
+      requestAnimationFrame(animateDrop);
+    } else {
+      board[animDisc.row][animDisc.col] = animDisc.p;
+      animating = false;
+      checkEnd();
+      if (!gameOver) nextTurn();
+      else updateStatus();
+    }
+  }
+
+    function checkWinner(bd, p) {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS - 3; c++) {
+        if ([0,1,2,3].every(i => bd[r][c+i] === p)) return true;
+      }
+    }
+    for (let c = 0; c < COLS; c++) {
+      for (let r = 0; r < ROWS - 3; r++) {
+        if ([0,1,2,3].every(i => bd[r+i][c] === p)) return true;
+      }
+    }
+    for (let r = 0; r < ROWS - 3; r++) {
+      for (let c = 0; c < COLS - 3; c++) {
+        if ([0,1,2,3].every(i => bd[r+i][c+i] === p)) return true;
+      }
+    }
+    for (let r = 3; r < ROWS; r++) {
+      for (let c = 0; c < COLS - 3; c++) {
+        if ([0,1,2,3].every(i => bd[r-i][c+i] === p)) return true;
+      }
+    }
+    return false;
+  }
+  function checkDraw() {
+    return board.every(row => row.every(cell => cell !== EMPTY));
+  }
+
+  function checkEnd() {
+    if (checkWinner(board, currentPlayer)) {
+      gameOver = true;
+      lastWinner = currentPlayer === P1 ? '🔴 紅棋勝利!' : '🟡 黃棋勝利!';
+      updateStatus();
+      replayControls.style.display = 'none';
+      return;
+    }
+    if (checkDraw()) {
+      gameOver = true;
+      lastWinner = '平手，無勝利者!';
+      updateStatus();
+      replayControls.style.display = 'none';
+      return;
+    }
+  }
+
+  function nextTurn() {
+    currentPlayer = currentPlayer === P1 ? P2 : P1;
+    updateStatus();
+    if (!gameOver && isAIturn()) {
+      setTimeout(() => aiMove(), 300);
+    }
+  }
+
+  function updateStatus() {
+    if (gameOver) {
+      statusEl.textContent = lastWinner;
+      return;
+    }
+    let turnText = currentPlayer === P1 ? '🔴 紅棋玩家下棋' : '🟡 黃棋玩家下棋';
+    if (mode === 'ai' && currentPlayer === P2) turnText = `🟡 電腦下棋 (難度:${difficulty})`;
+    if (mode === 'aivsai') turnText = currentPlayer === P1 ? '🔴 紅棋電腦下棋' : '🟡 黃棋電腦下棋';
+    statusEl.textContent = turnText;
+  }
+
+  function isAIturn() {
+    if (mode === 'pvp') return false;
+    if (mode === 'ai' && currentPlayer === P2) return true;
+    if (mode === 'aivsai') return true;
+    return false;
+  }
+
+  function aiMove() {
+    if (gameOver) return;
+    let depth = difficulty;
+    if (mode === 'aivsai') depth = difficulty; 
+
+    const best = minimax(board, depth, -Infinity, Infinity, currentPlayer);
+    if (best.col === null) {
+
+      gameOver = true;
+      lastWinner = '平手，無勝利者!';
+      updateStatus();
+      replayControls.style.display = 'none';
+      return;
+    }
+    const row = getOpenRow(best.col);
+    makeMove(best.col, row, currentPlayer);
+  }
+
+  function minimax(bd, depth, alpha, beta, player) {
+    if (checkWinner(bd, P1)) return { score: player === P1 ? 1000000 : -1000000, col: null };
+    if (checkWinner(bd, P2)) return { score: player === P2 ? 1000000 : -1000000, col: null };
+    if (checkDraw() || depth === 0) {
+      return { score: evaluateBoard(bd, player), col: null };
+    }
+
+    const validCols = [];
+    for (let c = 0; c < COLS; c++) {
+      if (bd[0][c] === EMPTY) validCols.push(c);
+    }
+
+    let bestCol = validCols[0];
+    if (player === currentPlayer) {
+      let maxEval = -Infinity;
+      for (const col of validCols) {
+        const row = getOpenRowInBoard(bd, col);
+        if (row === null) continue;
+        const newBoard = copyBoard(bd);
+        newBoard[row][col] = player;
+        const evalResult = minimax(newBoard, depth - 1, alpha, beta, switchPlayer(player));
+        if (evalResult.score > maxEval) {
+          maxEval = evalResult.score;
+          bestCol = col;
+        }
+        alpha = Math.max(alpha, maxEval);
+        if (beta <= alpha) break;
+      }
+      return { score: maxEval, col: bestCol };
+    } else {
+      let minEval = Infinity;
+      for (const col of validCols) {
+        const row = getOpenRowInBoard(bd, col);
+        if (row === null) continue;
+        const newBoard = copyBoard(bd);
+        newBoard[row][col] = player;
+        const evalResult = minimax(newBoard, depth - 1, alpha, beta, switchPlayer(player));
+        if (evalResult.score < minEval) {
+          minEval = evalResult.score;
+          bestCol = col;
+        }
+        beta = Math.min(beta, minEval);
+        if (beta <= alpha) break;
+      }
+      return { score: minEval, col: bestCol };
+    }
+  }
+
+  function switchPlayer(p) {
+    return p === P1 ? P2 : P1;
+  }
+
+  function copyBoard(bd) {
+    return bd.map(r => r.slice());
+  }
+
+  function getOpenRowInBoard(bd, col) {
+    for (let r = ROWS - 1; r >= 0; r--) {
+      if (bd[r][col] === EMPTY) return r;
+    }
+    return null;
+  }
+
+  function evaluateBoard(bd, player) {
+    const opponent = switchPlayer(player);
+    let score = 0;
+    const SCORE_4 = 1000000;
+    const SCORE_3 = 1000;
+    const SCORE_2 = 10;
+
+    function countSeq(arr, p) {
+      let val = 0;
+      for (let i = 0; i <= arr.length - 4; i++) {
+        const window = arr.slice(i, i + 4);
+        const countP = window.filter(x => x === p).length;
+        const countEmpty = window.filter(x => x === EMPTY).length;
+        const countOpp = window.filter(x => x !== p && x !== EMPTY).length;
+        if (countOpp === 0) {
+          if (countP === 4) return SCORE_4;
+          else if (countP === 3 && countEmpty === 1) val += SCORE_3;
+          else if (countP === 2 && countEmpty === 2) val += SCORE_2;
+        }
+      }
+      return val;
+    }
+
+    for (let r = 0; r < ROWS; r++) {
+      const rowArr = bd[r];
+      score += countSeq(rowArr, player);
+      score -= countSeq(rowArr, opponent) * 1.1;
+    }
+    for (let c = 0; c < COLS; c++) {
+      let colArr = [];
+      for (let r = 0; r < ROWS; r++) colArr.push(bd[r][c]);
+      score += countSeq(colArr, player);
+      score -= countSeq(colArr, opponent) * 1.1;
+    }
+    for (let r = 0; r < ROWS - 3; r++) {
+      for (let c = 0; c < COLS - 3; c++) {
+        const diag = [bd[r][c], bd[r+1][c+1], bd[r+2][c+2], bd[r+3][c+3]];
+        score += countSeq(diag, player);
+        score -= countSeq(diag, opponent) * 1.1;
+      }
+    }
+    for (let r = 3; r < ROWS; r++) {
+      for (let c = 0; c < COLS - 3; c++) {
+        const diag = [bd[r][c], bd[r-1][c+1], bd[r-2][c+2], bd[r-3][c+3]];
+        score += countSeq(diag, player);
+        score -= countSeq(diag, opponent) * 1.1;
+      }
+    }
+    return score;
+  }
+
+  function startReplay(history) {
+    if (!history || history.length === 0) return;
+    historyToReplay = history;
+    replayIndex = 0;
+    replayControls.style.display = 'flex';
+    resetBoardForReplay();
+    isPlayingReplay = false;
+    updateReplayButtons();
+  }
+
+  function resetBoardForReplay() {
+    board = Array.from({ length: ROWS }, () => Array(COLS).fill(EMPTY));
+    draw();
+  }
+
+  function replayNext() {
+    if (replayIndex >= historyToReplay.length) {
+      stopReplay();
+      return;
+    }
+    const move = historyToReplay[replayIndex];
+    board[move.row][move.col] = move.player;
+    replayIndex++;
+    draw();
+    updateReplayButtons();
+  }
+
+  function replayBack() {
+    if (replayIndex <= 0) return;
+    replayIndex--;
+    resetBoardForReplay();
+    for (let i = 0; i < replayIndex; i++) {
+      const move = historyToReplay[i];
+      board[move.row][move.col] = move.player;
+    }
+    draw();
+    updateReplayButtons();
+  }
+
+  function toggleReplayPlay() {
+    if (isPlayingReplay) {
+      stopReplay();
+    } else {
+      startReplayAuto();
+    }
+  }
+
+  function startReplayAuto() {
+    if (!historyToReplay) return;
+    isPlayingReplay = true;
+    updateReplayButtons();
+    replayTimer = setInterval(() => {
+      if (replayIndex >= historyToReplay.length) {
+        stopReplay();
+      } else {
+        replayNext();
+      }
+    }, 700);
+  }
+
+  function stopReplay() {
+    isPlayingReplay = false;
+    clearInterval(replayTimer);
+    updateReplayButtons();
+  }
+
+  function updateReplayButtons() {
+    backBtn.disabled = replayIndex <= 0 || animating;
+    nextBtn.disabled = replayIndex >= (historyToReplay ? historyToReplay.length : 0) || animating;
+    playPauseBtn.textContent = isPlayingReplay ? '⏸️ 暫停' : '▶️ 播放';
+  }
+
+  function saveHistory() {
+    if (moveHistory.length === 0) {
+      alert('沒有棋譜可以儲存!');
+      return;
+    }
+    const name = prompt('請輸入此棋譜名稱：', `棋譜 ${new Date().toLocaleString()}`);
+    if (!name) return;
+    const saved = JSON.parse(localStorage.getItem('connect4_saves') || '[]');
+    saved.push({ name, moves: moveHistory });
+    localStorage.setItem('connect4_saves', JSON.stringify(saved));
+    loadSavedList();
+    alert('棋譜已儲存！');
+  }
+
+  function loadSavedList() {
+    savedList.innerHTML = '';
+    const saved = JSON.parse(localStorage.getItem('connect4_saves') || '[]');
+    if (saved.length === 0) {
+      savedList.innerHTML = '<li>無已儲存棋譜</li>';
+      return;
+    }
+    for (let i = 0; i < saved.length; i++) {
+      const li = document.createElement('li');
+      li.textContent = saved[i].name;
+      const btnLoad = document.createElement('button');
+      btnLoad.textContent = '▶️ 重播';
+      btnLoad.onclick = () => {
+        startReplay(saved[i].moves);
+      };
+      const btnDel = document.createElement('button');
+      btnDel.textContent = '❌ 刪除';
+      btnDel.onclick = () => {
+        if (confirm('確定要刪除此棋譜嗎？')) {
+          saved.splice(i, 1);
+          localStorage.setItem('connect4_saves', JSON.stringify(saved));
+          loadSavedList();
+        }
+      };
+      li.appendChild(btnLoad);
+      li.appendChild(btnDel);
+      savedList.appendChild(li);
+    }
+  }
+  
+  async function aiVsAiLoop() {
+    if (gameOver || animating || isPlayingReplay) return;
+    if (!isAIturn()) return;
+
+    aiMove();
+    await new Promise(r => setTimeout(r, 700));
+    if (!gameOver) setTimeout(aiVsAiLoop, 300);
+  }
+
+  resetBtn.onclick = () => { init(); };
+  toggleDarkBtn.onclick = () => {
+    document.body.classList.toggle('dark');
+    draw();
+  };
+  replayBtn.onclick = () => {
+    startReplay(moveHistory);
+  };
+  saveBtn.onclick = () => saveHistory();
+  modeSelect.onchange = () => {
+    difficultySelect.disabled = (modeSelect.value === 'pvp');
+    init();
+  };
+  difficultySelect.onchange = () => init();
+
+  backBtn.onclick = () => {
+    if (!animating) replayBack();
+  };
+  nextBtn.onclick = () => {
+    if (!animating) replayNext();
+  };
+  playPauseBtn.onclick = () => {
+    toggleReplayPlay();
+  };
+  restartBtn.onclick = () => {
+    resetBoardForReplay();
+    replayIndex = 0;
+    draw();
+    updateReplayButtons();
+  };
+
+  init();
+  loadSavedList();
+</script>
+</body>
+</html>
